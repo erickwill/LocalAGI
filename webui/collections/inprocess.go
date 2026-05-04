@@ -13,30 +13,45 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+// newVectorEngine creates the underlying RAG store for a collection.
+// Returns nil + logs on failure (engine misconfiguration or transient embedding/DB
+// outage). Callers must check for nil — RAG init failures must not crash the
+// embedding application; LocalRecall used to os.Exit on these errors but now
+// returns them, and we surface that to callers as a nil collection.
 func newVectorEngine(
 	vectorEngineType string,
 	llmClient *openai.Client,
 	apiURL, apiKey, collectionName, dbPath, fileAssets, embeddingModel, databaseURL string,
 	maxChunkSize, chunkOverlap int,
 ) *rag.PersistentKB {
+	var (
+		kb  *rag.PersistentKB
+		err error
+	)
 	switch vectorEngineType {
 	case "chromem":
 		xlog.Info("Chromem collection", "collectionName", collectionName, "dbPath", dbPath)
-		return rag.NewPersistentChromeCollection(llmClient, collectionName, dbPath, fileAssets, embeddingModel, maxChunkSize, chunkOverlap)
+		kb, err = rag.NewPersistentChromeCollection(llmClient, collectionName, dbPath, fileAssets, embeddingModel, maxChunkSize, chunkOverlap)
 	case "localai":
 		xlog.Info("LocalAI collection", "collectionName", collectionName, "apiURL", apiURL)
-		return rag.NewPersistentLocalAICollection(llmClient, apiURL, apiKey, collectionName, dbPath, fileAssets, embeddingModel, maxChunkSize, chunkOverlap)
+		kb, err = rag.NewPersistentLocalAICollection(llmClient, apiURL, apiKey, collectionName, dbPath, fileAssets, embeddingModel, maxChunkSize, chunkOverlap)
 	case "postgres":
 		if databaseURL == "" {
 			xlog.Error("DATABASE_URL is required for PostgreSQL engine")
 			return nil
 		}
 		xlog.Info("PostgreSQL collection", "collectionName", collectionName, "databaseURL", databaseURL)
-		return rag.NewPersistentPostgresCollection(llmClient, collectionName, dbPath, fileAssets, embeddingModel, maxChunkSize, chunkOverlap, databaseURL)
+		kb, err = rag.NewPersistentPostgresCollection(llmClient, collectionName, dbPath, fileAssets, embeddingModel, maxChunkSize, chunkOverlap, databaseURL)
 	default:
 		xlog.Error("Unknown vector engine", "engine", vectorEngineType)
 		return nil
 	}
+	if err != nil {
+		xlog.Error("Failed to create vector engine collection",
+			"engine", vectorEngineType, "collection", collectionName, "error", err)
+		return nil
+	}
+	return kb
 }
 
 // backendInProcess implements Backend using in-process state.
